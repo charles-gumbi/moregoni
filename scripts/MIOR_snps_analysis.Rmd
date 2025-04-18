@@ -1,5 +1,5 @@
 ---
-title: 'Microtus oregoni Autosomal vs Sex chromosomee genetic structure '
+title: 'Microtus oregoni Autosomal vs Sex chromosome genetic structure '
 author: "Bonginkosi Charles Gumbi"
 date: '`r Sys.Date()`'
 output:
@@ -8,11 +8,11 @@ output:
 email: bonginkg@ucr.edu
 ---
 
-installing packages if running script for the first time in your computer
+installing packages if running the script for the first time on your computer
 
 ```{r install packages}
-# installing from GitHub requires devtools
-#install.packages("devtools")
+# Installing from GitHub requires installing devtools
+#packages("devtools")
 #devtools::install_github("SexGenomicsToolkit/sgtr")
 #devtools::install_github("TheWangLab/algatr")
 #install.packages("parallelly", dependencies = T)
@@ -280,6 +280,6 @@ pca_plot <- tab %>%
         plot.title = element_text(hjust=0.5, size=15),
         text = element_text(size = 12,  family = "sans"))
 
-ggsave(plot = pca_plot, filename = "~/MIOR/moregoni/out_plots/pca_plot.png", width =6, height =8, dpi = 300)
+ggsave(plot = pca_plot, filename = "~/MIOR/moregoni/out_plots/pca_plot.png", width = 6, height = 8, dpi = 300)
 ```
 
