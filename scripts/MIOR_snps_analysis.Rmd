@@ -5,7 +5,7 @@ date: '`r Sys.Date()`'
 output:
   pdf_document: default
   html_document: default
-email: bonginkg@ucr.edu
+email: charlesgumbi@gmail.com
 ---
 
 installing packages if running the script for the first time on your computer
