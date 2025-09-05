@@ -1,0 +1,369 @@
+---
+title: 'Microtus oregoni Autosomal vs Sex chromosome genetic structure'
+author: "charles-gumbi"
+date: '`r Sys.Date()`'
+output:
+  pdf_document: default
+  html_document: default
+email: chrlesgumbi@gmail.com
+---
+
+# SNP Analysis Workflow for *Microtus oregoni*
+This document contains the analysis of SNP data comparing autosomal vs. sex chromosome genetic structure.  
+Each section is annotated for clarity, and we also describe what to expect from the outputs.
+
+---
+
+# 1. Install Required Packages
+We first ensure that all required packages are installed.  
+Some packages are from CRAN, others from GitHub.
+
+
+```{r install packages}
+# Installing from GitHub requires installing devtools
+install.packages("devtools")
+#packages("devtools")
+devtools::install_github("SexGenomicsToolkit/sgtr")
+devtools::install_github("TheWangLab/algatr")
+install.packages("parallelly", dependencies = T)
+
+# Install the r2vcftools library from GitHub
+devtools::install_github("Bioconductor-mirror/LEA", force=T)
+devtools::install_github("nspope/r2vcftools", force=T)
+
+
+remotes::install_github("nspope/r2vcftools")
+if (!requireNamespace("BiocManager", quietly=TRUE))
+    install.packages("BiocManager")
+BiocManager::install("gdsfmt")
+BiocManager::install("SNPRelate")
+```
+
+---
+
+# 2. Load Libraries
+Load the R libraries that will be used throughout the workflow.
+
+```{r loading libraries}
+#library(sgtr)
+library(stringr)
+library(adegenet)
+library(data.table)
+library(vcfR)
+library(RColorBrewer)
+library(reshape)
+library(hierfstat)
+library(tidyverse)
+library(pcadapt)
+library(tibble)
+library(here)
+library(pinfsc50)
+library(utils)
+library(fields)
+library(admisc)
+library(vegan)
+library(lfmm)
+#library(spdep)
+#library(LEA)
+library(wordcloud)
+library(ggmap)
+library(maps)
+library(mapdata)
+library(stringr)
+library(sp)
+#library(sf)
+library(algatr)
+library(here)
+library(viridis)
+library(tidyr)
+library(gridExtra)
+library(tibble)
+library(SNPRelate)
+#library(SeqArray)
+library(wingen)
+library(purrr)
+library(cowplot)
+library(vcfR)
+library(dplyr)
+library(gdsfmt)
+library(SNPRelate)
+library(tidyverse)
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(forcats)
+library(ggthemes)
+library(patchwork)
+library(devtools)
+```
+
+*Output:* No plots. You should see the libraries load without error. If there are errors, it usually means a package is missing.
+
+# Clear enviroment
+```{r clear_the_enviroment, echo=FALSE}
+rm(list=ls())
+```
+
+---
+# Import and Inspect VCF Data
+We import VCF data, inspect its structure, and prepare it for downstream analysis.
+```{r import_vcf, echo=FALSE}
+#SNPs dataset
+nohapvcf <- read.vcfR("~/radseq/nohaps/population/populations.snps.vcf", convertNA = TRUE, skip = 0, checkFile = T, check_keys = T)
+#metadata dataset
+metadata <- read.csv ("~/radseq/moregoni/data/mior_metadata_20250420.csv", header = T)
+```
+
+*Output:* You should see the number of SNPs, individuals, and some metadata about your dataset. This confirms the file was read correctly.
+
+# Convert VCF to Geind Object
+The `genind` format is useful for population genetics analyses in adegenet.
+```{r genind, echo=FALSE}
+# Load required libraries
+library(vcfR)
+library(adegenet)
+library(tibble)
+library(parallel)
+library(doParallel)
+library(foreach)
+
+# Set seed for reproducibility
+set.seed(101)
+
+# Detect number of cores and register parallel backend
+num_cores <- detectCores() - 1  # leave one core free
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Convert VCF to genind object (this part is not easily parallelizable, but we keep it)
+nohapgenind <- vcfR2genind(nohapvcf)
+
+# Convert genind to data frame in parallel
+nohapgenind_df <- genind2df(nohapgenind, usepop = FALSE)
+nohapgenind_df <- rownames_to_column(nohapgenind_df, "sample.id")
+
+# Merge metadata (can be parallelized if metadata is large)
+nohapgenind_df <- merge(nohapgenind_df, metadata, by = "sample.id")
+
+# Extract metadata columns
+other_data <- subset(nohapgenind_df[, -(2:117010)])
+
+# Create coordinates
+coord <- data.frame(x = other_data$lat, y = other_data$long)
+
+# Parallelize df2genind conversion (this is tricky, so we split the data and recombine)
+# Split data into chunks
+chunk_size <- ceiling(nrow(nohapgenind_df) / num_cores)
+chunks <- split(nohapgenind_df, ceiling(seq_along(1:nrow(nohapgenind_df)) / chunk_size))
+
+# Process chunks in parallel
+genind_chunks <- foreach(chunk = chunks, .packages = "adegenet") %dopar% {
+  adegenet::df2genind(
+    X = chunk[, c(2:117010)],
+    sep = "",
+    ncode = 1,
+    ind.names = chunk$sample.id,
+    loc.names = NULL,
+    pop = chunk$location,
+    NA.char = "NA",
+    ploidy = 2,
+    type = "codom",
+    strata = subset(chunk[, -(2:117010)]),
+    hierarchy = NULL
+  )
+}
+
+# Combine genind objects (if needed, depending on downstream analysis)
+# You may need to use `genind2df` again and merge manually if combining is not straightforward
+
+# Stop cluster
+stopCluster(cl)
+
+# Check population structure
+pop(nohapgenind)
+
+```
+
+# Samples size summary population
+```{r sample_size, echo=FALSE}
+ # Load required libraries
+library(dplyr)
+library(ggplot2)
+library(hrbrthemes)
+
+# Group and count samples by location
+location_counts <- nohapgenind_df %>%
+  group_by(location) %>%
+  count(name = "count")
+
+# Create violin plot
+ggplot(location_counts, aes(y = count)) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(title = "Distribution of Sample Counts by Location",
+       x = "Location",
+       y = "Count") +
+  theme_ipsum()
+
+```
+
+
+# Population structure with ADMIXTURE
+```{r pop_structure, echo=FALSE}
+samplelist <- read_tsv("~/radseq/admixture/file.list", 
+                       col_names = "sample.id")
+all_data <- tibble(sample.id=character(),
+                   k=numeric(),
+                   Q=character(),
+                   value=numeric())
+
+for (k in 1:10){
+  data <- read_delim(paste0("~/radseq/admixture/file.",k,".Q"),
+                     col_names = paste0("Q",seq(1:k)),
+                     delim=" ")
+  data$sample.id <- samplelist$sample.id
+  data$k <- k
+  
+  #This step converts from wide to long.
+  data %>% gather(Q, value, -sample.id,-k) -> data
+  all_data <- rbind(all_data,data)
+}
+
+all_data <- merge(all_data, metadata, by = "sample.id")
+
+k2plot <- all_data %>%
+   filter(k == 2) %>%
+  ggplot(aes(factor(sample.id), value, fill = factor(Q))) +
+  geom_col(color = "gray", size = 0.1) +
+  facet_grid(~fct_inorder(location), switch = "x", scales = "free", space = "free") +
+  theme_ipsum() + 
+  labs(x = "Individuals", title = "K=2", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expand_scale(add = 1)) +
+  theme(panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_blank(),
+    panel.grid = element_blank()) +
+  scale_fill_gdocs(guide = FALSE)
+
+k3plot <- all_data %>%
+   filter(k == 3) %>%
+  ggplot(aes(factor(sample.id), value, fill = factor(Q))) +
+  geom_col(color = "gray", size = 0.1) +
+  facet_grid(~fct_inorder(location), switch = "x", scales = "free", space = "free") +
+  theme_ipsum() + 
+  labs(x = "Individuals", title = "K=3", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expand_scale(add = 1)) +
+  theme(panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_blank(),
+    panel.grid = element_blank()) +
+  scale_fill_gdocs(guide = FALSE)
+
+k4plot <- all_data %>%
+   filter(k == 4) %>%
+  ggplot(aes(factor(sample.id), value, fill = factor(Q))) +
+  geom_col(color = "gray", size = 0.1) +
+  facet_grid(~fct_inorder(location), switch = "x", scales = "free", space = "free") +
+  theme_ipsum() + 
+  labs(x = "Individuals", title = "K=4", y = "Ancestry") +
+  scale_y_continuous(expand = c(0, 0)) +
+  scale_x_discrete(expand = expand_scale(add = 1)) +
+  theme(panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_blank(),
+    panel.grid = element_blank()) +
+  scale_fill_gdocs(guide = FALSE)
+
+combined_k = k2plot + k3plot + k4plot + plot_layout(ncol = 1)
+
+ggsave(plot = k2plot, filename = "~/radseq/moregoni/out_plots/K2_plot.png", width =8, height =6, dpi = 300)
+ggsave(plot = k3plot, filename = "~/radseq/moregoni/out_plots/K3_plot.png", width =8, height =6, dpi = 300)
+ggsave(plot = k4plot, filename = "~/radseq/moregoni/out_plots/K4_plot.png", width =8, height =6, dpi = 300)
+#ggsave(plot = combined_k, filename = "~/radseq/moregoni/out_plots/combined_k_plot.png", width =6, height =8, dpi = 300)
+```
+
+
+Principal Component Analysis with SNPRelate
+
+```{r pca_analysis, echo=FALSE}
+library(SNPRelate)
+library(tidyverse)
+snpgdsVCF2GDS("~/radseq/nohaps/population/populations.snps.vcf",
+              "~/radseq/nohaps/population/nohap_population.filtered.gds", method="biallelic.only")
+
+# loading gds object 
+genofile <- openfn.gds("~/radseq/nohaps/population/nohap_population.filtered.gds", readonly = F)
+```
+
+adding data to gds object 
+
+```{r gds, echo=FALSE}
+add.gdsn(genofile, "pop.group", metadata$location)
+add.gdsn(genofile, "sex", metadata$sex)
+add.gdsn(genofile, "state", metadata$state)
+```
+
+pruning linked loci
+
+```{r prunning_loci, }
+snpset_pruned <- snpgdsLDpruning(genofile, autosome.only = F)
+names(snpset_pruned)
+
+# Making a list of sites 
+snpset.id <- unlist(snpset_pruned)
+# getting  all selected snp id
+snpset.id <- unlist(unname(snpset_pruned))
+head(snpset.id)
+```
+---
+
+# 5. Principal Component Analysis (PCA)
+We perform PCA to explore genetic structure among individuals.
+
+```{r pca_with_genlight, echo=FALSE}
+pca <- snpgdsPCA(genofile, num.thread = 2, eigen.cnt = 16, snp.id = snpset.id, 
+                 missing.rate = 0.10, maf = 0.05, autosome.only = F)
+
+# principal Component Analysis (PCA) on genotypes:
+pca
+
+# calculating percent variance explained for each eigenvector
+pc.percent <- pca$varprop*100
+round(pc.percent, 2)
+
+
+# making a data frame of your PCA results
+tab <- data.frame(sample.id = pca$sample.id,
+                  PC1 = pca$eigenvect[,1],    # the first eigenvector
+                  PC2 = pca$eigenvect[,2],    # the second eigenvector
+                  stringsAsFactors = FALSE)
+
+
+tab <- merge(tab, metadata, by = "sample.id")
+
+# ploting pallete
+q_palette <- c("#440154", "#0072B2", "#D55E00")
+
+pca_plot <- tab %>%
+  ggplot(.,aes(x = PC1, y = PC2)) +
+  geom_hline(yintercept = 0) +
+  geom_vline(xintercept = 0) + 
+  geom_point(aes(colour = location, shape = sex), 
+             size = 3, show.legend = T) + # centroids
+  scale_colour_manual(values = q_palette) +
+  xlim(-0.3, 0.3) +  # Set x-axis limits
+  ylim(-0.3, 0.3) +  # Set y-axis limits
+  labs(x = "Linear discriminant 1 (19.5%)", y = "Linear discriminant 2 (9.7%)", 
+       shape = "Sex", colour = "Population") +
+  theme_cowplot() +
+  theme(axis.text.y = element_text(colour="black", size=12), # Custom theme for ggplot2
+        axis.text.x = element_text(colour="black", size = 12),
+        axis.title = element_text(colour="black", size = 12),
+        panel.border = element_rect(colour="black", fill = NA, size=1),
+        panel.background = element_blank(),
+        plot.title = element_text(hjust=0.5, size=15),
+        text = element_text(size = 12,  family = "sans"))
+
+ggsave(plot = pca_plot, filename = "~/radseq/moregoni/out_plots/pca_plot.png", width = 6, height = 8, dpi = 300)
+```*Output:* A PCA scatter plot where individuals are distributed according to genetic similarity. Clusters may correspond to populations or sexes.  
+*Output:* Interpretation: If sex chromosomes strongly differentiate individuals, you may see distinct clusters separating males and females.
+
+
