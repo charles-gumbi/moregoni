@@ -11,201 +11,184 @@ email: chrlesgumbi@gmail.com
 # SNP Analysis Workflow for *Microtus oregoni*
 This document contains the analysis of SNP data comparing autosomal vs. sex chromosome genetic structure.  
 Each section is annotated for clarity, and we also describe what to expect from the outputs.
-
 ---
-
-# 1. Install Required Packages
-We first ensure that all required packages are installed.  
-Some packages are from CRAN, others from GitHub.
-
-
-```{r install packages}
-# Installing from GitHub requires installing devtools
-install.packages("devtools")
-#packages("devtools")
-devtools::install_github("SexGenomicsToolkit/sgtr")
-devtools::install_github("TheWangLab/algatr")
-install.packages("parallelly", dependencies = T)
-
-# Install the r2vcftools library from GitHub
-devtools::install_github("Bioconductor-mirror/LEA", force=T)
-devtools::install_github("nspope/r2vcftools", force=T)
-
-
-remotes::install_github("nspope/r2vcftools")
-if (!requireNamespace("BiocManager", quietly=TRUE))
-    install.packages("BiocManager")
-BiocManager::install("gdsfmt")
-BiocManager::install("SNPRelate")
-```
-
----
-
-# 2. Load Libraries
-Load the R libraries that will be used throughout the workflow.
-
-```{r loading libraries}
-#library(sgtr)
-library(stringr)
-library(adegenet)
-library(data.table)
-library(vcfR)
-library(RColorBrewer)
-library(reshape)
-library(hierfstat)
-library(tidyverse)
-library(pcadapt)
-library(tibble)
-library(here)
-library(pinfsc50)
-library(utils)
-library(fields)
-library(admisc)
-library(vegan)
-library(lfmm)
-#library(spdep)
-#library(LEA)
-library(wordcloud)
-library(ggmap)
-library(maps)
-library(mapdata)
-library(stringr)
-library(sp)
-#library(sf)
-library(algatr)
-library(here)
-library(viridis)
-library(tidyr)
-library(gridExtra)
-library(tibble)
-library(SNPRelate)
-#library(SeqArray)
-library(wingen)
-library(purrr)
-library(cowplot)
-library(vcfR)
-library(dplyr)
-library(gdsfmt)
-library(SNPRelate)
-library(tidyverse)
-library(tidyverse)
-library(readr)
-library(ggplot2)
-library(forcats)
-library(ggthemes)
-library(patchwork)
-library(devtools)
-```
-
-*Output:* No plots. You should see the libraries load without error. If there are errors, it usually means a package is missing.
 
 # Clear enviroment
+
 ```{r clear_the_enviroment, echo=FALSE}
 rm(list=ls())
 ```
 
----
-# Import and Inspect VCF Data
-We import VCF data, inspect its structure, and prepare it for downstream analysis.
+# ------------------------------------------------------------------------------
+# Load SNP dataset and metadata, and filter for biallelic SNPs
+# ------------------------------------------------------------------------------
+
+# Load the VCF file containing SNP data
+# - convertNA = TRUE: convert missing genotype calls to NA
+# - skip = 0: start reading from the first line
+# - checkFile = TRUE: verify the file exists
+# - check_keys = TRUE: check for duplicate keys in the VCF header
+
 ```{r import_vcf, echo=FALSE}
-#SNPs dataset
-nohapvcf <- read.vcfR("~/radseq/nohaps/population/populations.snps.vcf", convertNA = TRUE, skip = 0, checkFile = T, check_keys = T)
-#metadata dataset
-metadata <- read.csv ("~/radseq/moregoni/data/mior_metadata_20250420.csv", header = T)
+# Load required library
+library(vcfR)          # For reading and manipulating VCF files
+library(tidyverse)     # For data manipulation
+library(stringr)       # For string operations
+
+# ------------------------------------------------------------------------------
+# Step 1: Load the VCF file
+# ------------------------------------------------------------------------------
+nohapvcf <- read.vcfR(
+  "~/radseq/nohaps/population/populations.snps.vcf",
+  convertNA = TRUE,
+  skip = 0,
+  checkFile = TRUE,
+  check_keys = TRUE
+)
+
+# ------------------------------------------------------------------------------
+# Step 2: Filter for biallelic SNPs
+# ------------------------------------------------------------------------------
+
+# Extract the fixed (INFO) fields from the VCF
+fix_fields <- nohapvcf@fix
+
+# Biallelic SNPs have only one alternate allele (i.e., no commas in ALT field)
+biallelic_mask <- !str_detect(fix_fields[, "ALT"], ",")
+
+# Subset the VCF object to retain only biallelic SNPs
+nohapvcf <- nohapvcf[biallelic_mask, ]
+
+# ------------------------------------------------------------------------------
+# Step 3: Load metadata
+# ------------------------------------------------------------------------------
+
+# Read metadata containing sample information (e.g., location, sex, state)
+metadata <- read.csv(
+  "~/radseq/moregoni/data/mior_metadata_20250420.csv",
+  header = TRUE
+)
 ```
 
 *Output:* You should see the number of SNPs, individuals, and some metadata about your dataset. This confirms the file was read correctly.
 
-# Convert VCF to Geind Object
-The `genind` format is useful for population genetics analyses in adegenet.
-```{r genind, echo=FALSE}
+# ------------------------------------------------------------------------------
+# Convert VCF to genind object and summarize sample sizes by population
+# ------------------------------------------------------------------------------
+```{r, vcf_to_geind }
 # Load required libraries
-library(vcfR)
-library(adegenet)
-library(tibble)
-library(parallel)
-library(doParallel)
-library(foreach)
+library(vcfR)         # For reading and handling VCF files
+library(adegenet)     # For population genetics analysis and genind objects
+library(tibble)       # For data frame manipulation
+library(parallel)     # For detecting available CPU cores
+library(doParallel)   # For registering parallel backend
+library(foreach)      # For parallel loops
+library(dplyr)        # For data manipulation
+library(ggplot2)      # For plotting
+library(hrbrthemes)   # For clean ggplot themes
 
-# Set seed for reproducibility
-set.seed(101)
+# ------------------------------------------------------------------------------
+# Step 1: Set up parallel processing
+# ------------------------------------------------------------------------------
 
-# Detect number of cores and register parallel backend
-num_cores <- detectCores() - 1  # leave one core free
-cl <- makeCluster(num_cores)
-registerDoParallel(cl)
+set.seed(101)  # Set seed for reproducibility
+num_cores <- detectCores() - 1  # Detect number of cores, leave one free
+cl <- makeCluster(num_cores)   # Create cluster
+registerDoParallel(cl)         # Register parallel backend
 
-# Convert VCF to genind object (this part is not easily parallelizable, but we keep it)
+# ------------------------------------------------------------------------------
+# Step 2: Convert VCF to genind object
+# ------------------------------------------------------------------------------
+
+# Convert VCF object (already loaded as `nohapvcf`) to genind format
+# This format is used for population genetics analyses in adegenet
 nohapgenind <- vcfR2genind(nohapvcf)
 
-# Convert genind to data frame in parallel
+# ------------------------------------------------------------------------------
+# Step 3: Convert genind to data frame and merge metadata
+# ------------------------------------------------------------------------------
+
+# Convert genind object to a data frame (genotypes only)
 nohapgenind_df <- genind2df(nohapgenind, usepop = FALSE)
+
+# Add sample IDs as a column
 nohapgenind_df <- rownames_to_column(nohapgenind_df, "sample.id")
 
-# Merge metadata (can be parallelized if metadata is large)
+# Merge genotype data with metadata (e.g., location, sex, lat/long)
 nohapgenind_df <- merge(nohapgenind_df, metadata, by = "sample.id")
 
-# Extract metadata columns
-other_data <- subset(nohapgenind_df[, -(2:117010)])
+# ------------------------------------------------------------------------------
+# Step 4: Extract metadata and create coordinates
+# ------------------------------------------------------------------------------
 
-# Create coordinates
+# Extract non-genotype columns (metadata)
+other_data <- subset(nohapgenind_df[, -(2:117010)])  # Adjust column range as needed
+
+# Create coordinate data frame for spatial analysis (if needed)
 coord <- data.frame(x = other_data$lat, y = other_data$long)
 
-# Parallelize df2genind conversion (this is tricky, so we split the data and recombine)
-# Split data into chunks
+# ------------------------------------------------------------------------------
+# Step 5: Convert data frame back to genind in parallel (optional)
+# ------------------------------------------------------------------------------
+
+# Split data into chunks for parallel processing
 chunk_size <- ceiling(nrow(nohapgenind_df) / num_cores)
 chunks <- split(nohapgenind_df, ceiling(seq_along(1:nrow(nohapgenind_df)) / chunk_size))
 
-# Process chunks in parallel
+# Convert each chunk to genind object in parallel
 genind_chunks <- foreach(chunk = chunks, .packages = "adegenet") %dopar% {
   adegenet::df2genind(
-    X = chunk[, c(2:117010)],
-    sep = "",
-    ncode = 1,
+    X = chunk[, c(2:117010)],  # Genotype columns
+    sep = "",                  # No separator in allele coding
+    ncode = 1,                 # Number of characters per allele
     ind.names = chunk$sample.id,
     loc.names = NULL,
     pop = chunk$location,
     NA.char = "NA",
     ploidy = 2,
-    type = "codom",
-    strata = subset(chunk[, -(2:117010)]),
+    type = "codom",            # Codominant markers
+    strata = subset(chunk[, -(2:117010)]),  # Metadata
     hierarchy = NULL
   )
 }
 
-# Combine genind objects (if needed, depending on downstream analysis)
-# You may need to use `genind2df` again and merge manually if combining is not straightforward
+# Note: Combining genind objects is non-trivial and may require manual merging
 
-# Stop cluster
-stopCluster(cl)
+# ------------------------------------------------------------------------------
+# Step 6: Stop parallel cluster
+# ------------------------------------------------------------------------------
 
-# Check population structure
+stopCluster(cl)  # Clean up parallel resources
+
+# ------------------------------------------------------------------------------
+# Step 7: Check population structure
+# ------------------------------------------------------------------------------
+
+# View population assignments from original genind object
 pop(nohapgenind)
 
-```
+# ------------------------------------------------------------------------------
+# Step 8: Summarize sample sizes by population
+# ------------------------------------------------------------------------------
 
-# Samples size summary population
-```{r sample_size, echo=FALSE}
- # Load required libraries
-library(dplyr)
-library(ggplot2)
-library(hrbrthemes)
-
-# Group and count samples by location
+# Count number of samples per location
 location_counts <- nohapgenind_df %>%
   group_by(location) %>%
   count(name = "count")
 
-# Create violin plot
-ggplot(location_counts, aes(y = count)) +
-  geom_bar(fill = "skyblue", color = "black") +
-  labs(title = "Distribution of Sample Counts by Location",
-       x = "Location",
-       y = "Count") +
+# ------------------------------------------------------------------------------
+# Step 9: Plot sample size distribution
+# ------------------------------------------------------------------------------
+
+ggplot(location_counts, aes(x = location, y = count)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of Sample Counts by Location",
+    x = "Location",
+    y = "Count"
+  ) +
   theme_ipsum()
-
 ```
-
 
 # ------------------------------------------------------------------------------
 # Population Structure Analysis using ADMIXTURE Output
