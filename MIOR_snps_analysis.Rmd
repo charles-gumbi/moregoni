@@ -3,8 +3,8 @@ title: 'Microtus oregoni Autosomal vs Sex chromosome genetic structure'
 author: "charles-gumbi"
 date: '`r Sys.Date()`'
 output:
-  pdf_document: default
   html_document: default
+  pdf_document: default
 email: chrlesgumbi@gmail.com
 ---
 
@@ -357,44 +357,10 @@ ggsave(plot = k6plot, filename = "~/radseq/moregoni/out_plots/K6_plot.png", widt
 
 ```
 
-
-Principal Component Analysis with SNPRelate
-
-```{r pca_analysis, echo=FALSE}
-library(SNPRelate)
-library(tidyverse)
-snpgdsVCF2GDS("~/radseq/nohaps/population/populations.snps.vcf",
-              "~/radseq/nohaps/population/nohap_population.filtered.gds", method="biallelic.only")
-
-# loading gds object 
-genofile <- openfn.gds("~/radseq/nohaps/population/nohap_population.filtered.gds", readonly = F)
-```
-
-adding data to gds object 
-
-```{r gds, echo=FALSE}
-add.gdsn(genofile, "pop.group", metadata$location)
-add.gdsn(genofile, "sex", metadata$sex)
-add.gdsn(genofile, "state", metadata$state)
-```
-
-pruning linked loci
-
-```{r prunning_loci, }
-snpset_pruned <- snpgdsLDpruning(genofile, autosome.only = F)
-names(snpset_pruned)
-
-# Making a list of sites 
-snpset.id <- unlist(snpset_pruned)
-# getting  all selected snp id
-snpset.id <- unlist(unname(snpset_pruned))
-head(snpset.id)
-```
-
-
 # ------------------------------------------------------------------------------
 # Principal Component Analysis (PCA) using SNPRelate and ggplot2
 # ------------------------------------------------------------------------------
+
 ```{r pca_with_genlight, echo=FALSE}
 # Load required libraries
 library(SNPRelate)     # For working with GDS files and performing PCA
